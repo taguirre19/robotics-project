@@ -45,6 +45,8 @@ class MPCParams():
         self.P = np.identity(self.N)
         self.q = np.zeros(self.N)
 
+        self.feet_tracker = np.ones((int(self.duration/self.T), 2))
+
         self.Zmin, self.Zmax = self.generate_foot_trajectory(robot_feet, step_duration)
     def compute_next_coord(self, coord):
         if coord == 'x':        
@@ -106,7 +108,7 @@ class MPCParams():
         Zxmax = np.zeros(timesteps)
         Zymin = np.zeros(timesteps)
         Zymax = np.zeros(timesteps)
-
+        feet_tracker = np.ones((timesteps, 2), dtype=int)
 
         # First step both robot_feet are at the ground
         Zxmin[:nb_samples_per_step] = robot_feet.right.x - robot_feet.width/2
@@ -118,6 +120,7 @@ class MPCParams():
         RIGHT = 1
 
         foot = RIGHT
+
         current = nb_samples_per_step
         for step in range(nb_steps):
             if foot == LEFT:
@@ -125,10 +128,13 @@ class MPCParams():
                 Zxmax[current:current+nb_samples_per_step] = robot_feet.left.x + robot_feet.width/2
 
                 foot = RIGHT
+                feet_tracker[current:current+nb_samples_per_step, 1] = 0
             else:
                 Zxmin[current:current+nb_samples_per_step] = robot_feet.right.x - robot_feet.width/2
                 Zxmax[current:current+nb_samples_per_step] = robot_feet.right.x + robot_feet.width/2
                 foot = LEFT
+                feet_tracker[current:current+nb_samples_per_step, 0] = 0
+
 
             Zymin[current:current+nb_samples_per_step] = robot_feet.left.y - robot_feet.length/2 + (step+1) * robot_feet.spread
             Zymax[current:current+nb_samples_per_step] = robot_feet.left.y + robot_feet.length/2 + (step+1) * robot_feet.spread
@@ -141,9 +147,12 @@ class MPCParams():
         Zymin[current:] = robot_feet.left.y - robot_feet.length/2 + (nb_steps+1) * robot_feet.spread
         Zymax[current:] = robot_feet.left.y + robot_feet.length/2 + (nb_steps+1) * robot_feet.spread
 
+
         # Stack in one np array
         Zmin = np.vstack((Zxmin, Zymin))
         Zmax = np.vstack((Zxmax, Zymax))
+
+        self.feet_tracker = feet_tracker
 
         return Zmin, Zmax
 
