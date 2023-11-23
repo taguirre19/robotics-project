@@ -72,6 +72,9 @@ class MPCParams():
             x_path.append(self.x[0])
             z_path.append(self.z)
 
+        # reinisialize the problem
+        self.x = np.zeros(self.x_dim)
+
         return x_path, z_path, jerks
 
     def generate_foot_trajectory(self, left_foot_max, left_foot_min,
