@@ -1,13 +1,28 @@
 import numpy as np
 from qpsolvers import solve_qp
 from scipy.sparse import csr_matrix
+from dataclasses import dataclass
+
+
+@dataclass
+class foot:
+    x: float
+    y: float
+
+@dataclass
+class feet:
+    spread: float
+    length: float
+    width: float
+    right: foot
+    left: foot
+      
+    
+
 
 
 class MPCParams():
-    def __init__(self, T, N, h_CoM, g, 
-                 left_foot_max=0.175, left_foot_min=0.05, 
-                 right_foot_max=-0.05, right_foot_min=-0.175, 
-                 duration=8, step_duration=1):
+    def __init__(self, T, N, h_CoM, g, robot_feet, duration=8, step_duration=1):
         self.T = T
         self.duration = duration
         self.N = N
@@ -24,71 +39,80 @@ class MPCParams():
 
         self.e = np.array([1., 0., h_CoM/g])
         
-        # initial x
-        self.x_dim = 3
-        self.x = np.zeros(self.x_dim)
-
-        # output
-        self.jerk_dim = self.N
+        self.x = np.zeros(3)
+        self.y = np.zeros(3)
 
         self.P = np.identity(self.N)
         self.q = np.zeros(self.N)
 
-        self.Zmin, self.Zmax = self.generate_foot_trajectory(left_foot_max, 
-                                                             left_foot_min, 
-                                                             right_foot_max, 
-                                                             right_foot_min, 
-                                                             step_duration)
-    def compute_next_x(self):        
-        return self.A @ self.x + self.jerk * self.b
-    
+        self.Zmin, self.Zmax = self.generate_foot_trajectory(robot_feet, step_duration)
+    def compute_next_coord(self, coord):
+        if coord == 'x':        
+            return self.A @ self.x + self.jerk * self.b
+        elif coord == 'y':
+            return self.A @ self.y + self.jerk * self.b
+        else:
+            raise ValueError('coord should be x or y')
+        
     def solve_step_k(self,
                     Zmin_k: np.array, 
                     Zmax_k: np.array,
-                    solver: str):
+                    solver: str,
+                    coord: str='x'):
+        
         G = np.vstack((self.Pu, -self.Pu))
-        h = np.hstack((Zmax_k- self.Px @ self.x, self.Px @ self.x -Zmin_k))
+        if coord == 'x':
+            h = np.hstack((Zmax_k- self.Px @ self.x, self.Px @ self.x -Zmin_k))
+        elif coord == 'y':
+            h = np.hstack((Zmax_k- self.Px @ self.y, self.Px @ self.y -Zmin_k))
 
         jerk = solve_qp(self.P, self.q, G=G, h=h, solver=solver)
 
         return jerk
 
     
-    def solve(self, Zmin, Zmax, solver):
+    def solve(self, Zmin, Zmax, coord, solver='daqp'):
         jerks = []
-        x_path = []
+        coord_path = []
         z_path = []
         timesteps = int(self.duration/self.T)
         for k in range(timesteps-self.N):
-            jerk = self.solve_step_k(Zmin[1+k:1+k+self.N], Zmax[1+k:1+k+self.N], solver)
+            jerk = self.solve_step_k(Zmin[1+k:1+k+self.N], Zmax[1+k:1+k+self.N], solver, coord)
             if jerk is None:
                 break
-                # raise ValueError("Not valid solution QP")
-            self.jerk = jerk[0]
 
-            self.x = self.compute_next_x()
-            self.z = self.e @ self.x
-            jerks.append(self.jerk)
-            x_path.append(self.x[0])
+            self.jerk = jerk[0]
+            if coord == 'x':
+                self.x = self.compute_next_coord('x')
+                self.z = self.e @ self.x
+                coord_path.append(self.x[0])
+            elif coord == 'y':
+                self.y = self.compute_next_coord('y')
+                self.z = self.e @ self.y
+                coord_path.append(self.y[0])
+
+            jerks.append(self.jerk)            
             z_path.append(self.z)
 
-        # reinisialize the problem
-        self.x = np.zeros(self.x_dim)
+        return coord_path, z_path, jerks
 
-        return x_path, z_path, jerks
 
-    def generate_foot_trajectory(self, left_foot_max, left_foot_min,
-                             right_foot_max, right_foot_min, step_duration):
+    def generate_foot_trajectory(self, robot_feet, step_duration):
         timesteps = int(self.duration/self.T)
         nb_steps = int(self.duration/step_duration) - 2
         nb_samples_per_step = int(step_duration/self.T)
 
-        Zmin = np.zeros(timesteps)
-        Zmax = np.zeros(timesteps)
+        Zxmin = np.zeros(timesteps)
+        Zxmax = np.zeros(timesteps)
+        Zymin = np.zeros(timesteps)
+        Zymax = np.zeros(timesteps)
 
-        # First step both feet are at the ground
-        Zmin[:nb_samples_per_step] = right_foot_min
-        Zmax[:nb_samples_per_step] = left_foot_max
+
+        # First step both robot_feet are at the ground
+        Zxmin[:nb_samples_per_step] = robot_feet.right.x - robot_feet.width/2
+        Zxmax[:nb_samples_per_step] = robot_feet.left.x + robot_feet.width/2
+        Zymin[:nb_samples_per_step] = robot_feet.right.y - robot_feet.length/2
+        Zymax[:nb_samples_per_step] = robot_feet.right.y + robot_feet.length/2
 
         LEFT = 0
         RIGHT = 1
@@ -97,18 +121,31 @@ class MPCParams():
         current = nb_samples_per_step
         for step in range(nb_steps):
             if foot == LEFT:
-                Zmin[current:current+nb_samples_per_step] = left_foot_min
-                Zmax[current:current+nb_samples_per_step] = left_foot_max
+                Zxmin[current:current+nb_samples_per_step] = robot_feet.left.x - robot_feet.width/2
+                Zxmax[current:current+nb_samples_per_step] = robot_feet.left.x + robot_feet.width/2
+
                 foot = RIGHT
             else:
-                Zmin[current:current+nb_samples_per_step] = right_foot_min
-                Zmax[current:current+nb_samples_per_step] = right_foot_max
+                Zxmin[current:current+nb_samples_per_step] = robot_feet.right.x - robot_feet.width/2
+                Zxmax[current:current+nb_samples_per_step] = robot_feet.right.x + robot_feet.width/2
                 foot = LEFT
+
+            Zymin[current:current+nb_samples_per_step] = robot_feet.left.y - robot_feet.length/2 + (step+1) * robot_feet.spread
+            Zymax[current:current+nb_samples_per_step] = robot_feet.left.y + robot_feet.length/2 + (step+1) * robot_feet.spread
 
             current += nb_samples_per_step
 
-        # Last step both feet are at the ground
-        Zmin[current:] = right_foot_min
-        Zmax[current:] = left_foot_max
+        # Last step both robot_feet are at the ground
+        Zxmin[current:] = robot_feet.right.x - robot_feet.width/2
+        Zxmax[current:] = robot_feet.left.x + robot_feet.width/2
+        Zymin[current:] = robot_feet.left.y - robot_feet.length/2 + (nb_steps+1) * robot_feet.spread
+        Zymax[current:] = robot_feet.left.y + robot_feet.length/2 + (nb_steps+1) * robot_feet.spread
+
+        # Stack in one np array
+        Zmin = np.vstack((Zxmin, Zymin))
+        Zmax = np.vstack((Zxmax, Zymax))
 
         return Zmin, Zmax
+
+
+
