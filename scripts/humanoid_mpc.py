@@ -16,8 +16,6 @@ class feet:
     width: float
     right: foot
     left: foot
-      
-    
 
 
 
@@ -61,16 +59,7 @@ class MPCParams():
                     Zmax_k: np.array,
                     solver: str,
                     coord: str='x'):
-        
-        G = np.vstack((self.Pu, -self.Pu))
-        if coord == 'x':
-            h = np.hstack((Zmax_k- self.Px @ self.x, self.Px @ self.x -Zmin_k))
-        elif coord == 'y':
-            h = np.hstack((Zmax_k- self.Px @ self.y, self.Px @ self.y -Zmin_k))
-
-        jerk = solve_qp(self.P, self.q, G=G, h=h, solver=solver)
-
-        return jerk
+        pass
 
     
     def solve(self, Zmin, Zmax, coord, solver='daqp'):
@@ -156,5 +145,40 @@ class MPCParams():
 
         return Zmin, Zmax
 
+class MPCClassic(MPCParams):
+    def solve_step_k(self,
+            Zmin_k: np.array, 
+            Zmax_k: np.array,
+            solver: str,
+            coord: str='x'):
+        beta = 2
+        alpha = 10e-6 *  beta
 
+        Zref = (Zmax_k - Zmin_k) / 2
+        self.P = alpha * np.identity(self.N) + beta * self.Pu.T @ self.Pu
+        self.q = beta * self.Pu.T @ (self.Px @ self.x - Zref)
+        G = np.zeros((2 * self.N, self.N))
+        h = np.zeros((1, 2*self.N))
+
+        jerk = solve_qp(self.P, self.q, G=G, h=h, solver=solver)
+
+        return jerk
+
+            
+
+class MPCRobust(MPCParams):
+    def solve_step_k(self,
+                Zmin_k: np.array, 
+                Zmax_k: np.array,
+                solver: str,
+                coord: str='x'):
+        G = np.vstack((self.Pu, -self.Pu))
+        if coord == 'x':
+            h = np.hstack((Zmax_k- self.Px @ self.x, self.Px @ self.x -Zmin_k))
+        elif coord == 'y':
+            h = np.hstack((Zmax_k- self.Px @ self.y, self.Px @ self.y -Zmin_k))
+
+        jerk = solve_qp(self.P, self.q, G=G, h=h, solver=solver)
+
+        return jerk
 
