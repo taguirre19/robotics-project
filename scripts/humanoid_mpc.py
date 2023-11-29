@@ -145,6 +145,7 @@ class MPCParams():
 
         return Zmin, Zmax
 
+
 class MPCClassic(MPCParams):
     def solve_step_k(self,
             Zmin_k: np.array, 
@@ -182,3 +183,12 @@ class MPCRobust(MPCParams):
 
         return jerk
 
+
+class MPCForce(MPCRobust):
+    def compute_next_coord(self, coord):
+        force = 55e-5
+        if coord == 'x':
+            return self.A @ self.x + self.jerk * self.b + force
+        elif coord == 'y':
+            return self.A @ self.y + self.jerk * self.b
+        raise ValueError('coord should be x or y')
