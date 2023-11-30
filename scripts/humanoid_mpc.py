@@ -71,7 +71,6 @@ class MPCParams():
             jerk = self.solve_step_k(Zmin[1+k:1+k+self.N], Zmax[1+k:1+k+self.N], solver, coord)
             if jerk is None:
                 break
-
             self.jerk = jerk[0]
             if coord == 'x':
                 self.x = self.compute_next_coord('x')
@@ -185,10 +184,37 @@ class MPCRobust(MPCParams):
 
 
 class MPCForce(MPCRobust):
-    def compute_next_coord(self, coord):
-        force = 55e-5
-        if coord == 'x':
-            return self.A @ self.x + self.jerk * self.b + force
-        elif coord == 'y':
-            return self.A @ self.y + self.jerk * self.b
-        raise ValueError('coord should be x or y')
+    # Add force to the problem
+    def solve(self, Zmin, Zmax, coord, solver='daqp'):
+        jerks = []
+        coord_path = []
+        z_path = []
+        timesteps = int(self.duration/self.T)
+        for k in range(timesteps-self.N):
+            jerk = self.solve_step_k(Zmin[1+k:1+k+self.N], Zmax[1+k:1+k+self.N], solver, coord)
+            if jerk is None:
+                break
+
+            if k == 100:
+                  force =  10
+                  self.x[1] = force
+
+            if k == 101:
+                self.x[1] = 0
+      
+            self.jerk = jerk[0]
+            if coord == 'x':
+                self.x = self.compute_next_coord('x')
+                self.z = self.e @ self.x
+                coord_path.append(self.x[0])
+            elif coord == 'y':
+                self.y = self.compute_next_coord('y')
+                self.z = self.e @ self.y
+                coord_path.append(self.y[0])
+
+            jerks.append(self.jerk)            
+            z_path.append(self.z)
+
+        return coord_path, z_path, jerks
+
+    
