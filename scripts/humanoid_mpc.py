@@ -217,4 +217,120 @@ class MPCForce(MPCRobust):
 
         return coord_path, z_path, jerks
 
+class MPC2Paper:
+    def __init__(self, T, N, h_CoM, g, alpha, beta, m):
+        self.N = N
+        self.h_CoM = h_CoM
+        self.g = g
+        self.alpha = alpha
+        self.beta = beta
+        self.m = m # number of steps
+
+
+        # state variables
+        self.x = np.zeros(3)
+        self.y = np.zeros(3)
+        self.A = np.array([[1., T, (T**2)/2], [0., 1., T], [0., 0., 1.]]) 
+        self.b = np.array([(T**3)/6., T**2/2., T])
+        self.e = np.array([1., 0., h_CoM/g])
+        
+
+        # X_{k+1} = Pps x + Ppu jerk
+        # A matrix in paper 1
+        self.Pps = np.array([[1, (i+1)*T, (((i+1)*T)**2)/2] for i in range(self.N)]) 
+        self.Ppu = np.zeros((self.N, self.N))
+        for i in range(self.N):
+            for j in range(i+1):
+                self.Ppu[i, i-j] = (1 + 3*j + 3*(j**2)) * (T**3/6)
+        
+        # X_prima_{k+1} = Pvs x + Pvu jerk
+        self.Pvs = np.array([[0, 1, (i+1)*T] for i in range(self.N)]) 
+        self.Pvu = np.zeros((self.N,self.N))
+        for i in range(self.N):
+            for j in range(i+1):
+                self.Pvu[i, i-j] = (1 + 2*j) * (T**2/2)
+        
+        # Z Cop = Pzs x + Pzu jerk
+        # Px and Pu from paper 1
+        self.Pzs = np.array([[1., (i+1)*T, (((i+1)*T)**2)/2 - h_CoM/g] for i in range(self.N)])
+        self.Pzu = np.zeros((self.N, self.N))
+        for i in range(self.N):
+            for j in range(i+1):
+                self.Pzu[i, i-j] = (1 + 3*j + 3*(j**2)) * (T**3/6) - T*h_CoM/g
+
+        # X_k, X_prima_k, Z_k
+        self.position_x = np.zeros(N)
+        self.velocity_x = np.zeros(N)
+        self.z_x = np.zeros(N)
+        
+        self.position_y = np.zeros(N)
+        self.velocity_y = np.zeros(N)
+        self.z_y = np.zeros(N)
+        
     
+        # Input vector now:
+        # u = [ jerk_x , x_f]
+        self.position_f = np.zeros(m)
+        self.jerk = np.zeros(N)
+        
+        # I dont know if we should maintain this
+        self.feet_tracker = np.ones((int(self.duration/self.T), 2))
+
+    def update_variables(self, coord):
+        if coord == 'x':
+            self.x = self.A @ self.x + self.b * self.jerk[0]
+            self.position_x = self.Pps @ self.x + self.Ppu @ self.jerk
+            self.velocity_x = self.Pvs @ self.x + self.Pvu @ self.jerk
+            self.z_x = self.Pzs @ self.x + self.Pzu @ self.jerk
+        elif coord == 'y':
+            self.x = self.A @ self.y + self.b * self.jerk[0]
+            self.position_y = self.Pps @ self.y + self.Ppu @ self.jerk
+            self.velocity_y = self.Pvs @ self.y + self.Pvu @ self.jerk
+            self.z_y = self.Pzs @ self.y + self.Pzu @ self.jerk
+        else:
+            raise ValueError('coord should be x or y')
+    
+    def solve(self, solver, coord):
+        # TODO: 
+        # - How do obtain the matrix Uc and U 
+        # - We need a velocity ref
+        # - Generate matrix Q and P
+        # - This is only section 3
+        # I havent implemented section 4 and 5
+        jerks = []
+        coord_path = []
+        z_path = []
+        timesteps = int(self.duration/self.T)
+        for k in range(timesteps-self.N):
+            u = self.solve_step_k(Uc, U, Vref, solver, coord)
+            if u is None:
+                break
+            self.jerk = u[:self.N]
+            self.position_f = u[self.N:]
+            self.update_variables(coord)
+            if coord == 'x':
+                coord_path.append(self.x[0])
+                z = self.z_x[0] # ? 
+            elif coord == 'y':
+                coord_path.append(self.y[0])
+                z = self.z_y[0] # ?
+            jerks.append(self.jerk[0])
+            z_path.append(z)
+        return coord_path, z_path, jerks
+    
+    def solve_step_k(self, Uc, U, Vref, position_fc, solver, coord):
+        if coord == 'x':
+            state_vector = self.x.copy()
+        elif coord == 'y':
+            state_vector = self.y.copy()
+        # TODO: check dimensions
+        pk = np.zeros(self.N+self.m)
+        pk[:self.N] = self.beta * self.Pvu.T @ (self.Pvs @ state_vector - Vref) + self.gamma * self.Pzu.T (self.Pzs @ state_vector - Uc @ position_fc)
+        pk[self.N:] = - self.gamma * U.T @ (self.Pzs @ state_vector - Uc @ position_fc)
+        
+        Qk = np.zeros((self.N+self.m, self.N+self.m))
+        Qk[:self.N, :self.N] = self.alpha * np.identity(self.N) + self.beta * self.Pvu.T @ self.Pvu + self.gamma * self.Pzu.T @ self.Pzu
+        Qk[:self.N, self.N:] = - self.gamma * self.Pzu.T @ U.T
+        Qk[self.N:, :self.N] = - self.gamma * U.T @ self.Pzu
+        Qk[self.N:, self.N:] = self.gamma * U.T @ U
+        
