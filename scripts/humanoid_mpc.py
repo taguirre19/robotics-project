@@ -175,8 +175,6 @@ class MPCParams():
 
         return Zmin, Zmax
 
-<<<<<<< HEAD
-
 class MPCClassic(MPCParams):
     def solve_step_k(self,
             Zmin_k: np.array, 
@@ -215,9 +213,18 @@ class MPCRobust(MPCParams):
         return jerk
 
 
-class MPCForce(MPCRobust):
+class MPCForce(MPCParams):
+    def __init__(self, T, N, h_CoM, g, robot_feet, duration=8, step_duration=1, overlap=None, force=10):
+        super().__init__(T, N, h_CoM, g, robot_feet, duration, step_duration, overlap)
+        self.x = np.zeros(3)
+        self.y = np.zeros(3)
+
+        self.P = np.identity(self.N)
+        self.q = np.zeros(self.N)
+        self.force = force
+
     # Add force to the problem
-    def solve(self, Zmin, Zmax, coord, solver='daqp'):
+    def solve(self, Zmin, Zmax, coord, solver='daqp', force_k=300):
         jerks = []
         coord_path = []
         z_path = []
@@ -227,11 +234,10 @@ class MPCForce(MPCRobust):
             if jerk is None:
                 break
 
-            if k == 100:
-                  force =  10
-                  self.x[1] = force
+            if k == force_k:
+                  self.x[1] = self.force
 
-            if k == 101:
+            if k == force_k + 1:
                 self.x[1] = 0
       
             self.jerk = jerk[0]
@@ -248,7 +254,7 @@ class MPCForce(MPCRobust):
             z_path.append(self.z)
 
         return coord_path, z_path, jerks
-
+    
 class MPC2Paper:
     def __init__(self, T, N, h_CoM, g, alpha, beta,gamma, m, n_step, n_total):
         self.N = N
@@ -383,5 +389,3 @@ class MPC2Paper:
         
         u = solve_qp(Qk, pk, G=np.zeros((self.N+self.m, self.N+self.m)), h=np.zeros(self.N+self.m), solver=solver)
         return u
-=======
->>>>>>> d2089d0 (add overlap times)
