@@ -187,3 +187,45 @@ class MPCParams():
 
         return Zmin, Zmax
 
+class MPCForce(MPCParams):
+    def __init__(self, T, N, h_CoM, g, robot_feet, duration=8, step_duration=1, overlap=None, force=10):
+        super().__init__(T, N, h_CoM, g, robot_feet, duration, step_duration, overlap)
+        self.x = np.zeros(3)
+        self.y = np.zeros(3)
+
+        self.P = np.identity(self.N)
+        self.q = np.zeros(self.N)
+        self.force = force
+
+    # Add force to the problem
+    def solve(self, Zmin, Zmax, coord, solver='daqp', force_k=300):
+        jerks = []
+        coord_path = []
+        z_path = []
+        timesteps = int(self.duration/self.T)
+        for k in range(timesteps-self.N):
+            jerk = self.solve_step_k(Zmin[1+k:1+k+self.N], Zmax[1+k:1+k+self.N], solver, coord)
+            if jerk is None:
+                break
+
+            if k == force_k:
+                  self.x[1] = self.force
+
+            if k == force_k + 1:
+                self.x[1] = 0
+      
+            self.jerk = jerk[0]
+            if coord == 'x':
+                self.x = self.compute_next_coord('x')
+                self.z = self.e @ self.x
+                coord_path.append(self.x[0])
+            elif coord == 'y':
+                self.y = self.compute_next_coord('y')
+                self.z = self.e @ self.y
+                coord_path.append(self.y[0])
+
+            jerks.append(self.jerk)            
+            z_path.append(self.z)
+
+        return coord_path, z_path, jerks
+    
