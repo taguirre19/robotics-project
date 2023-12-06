@@ -209,10 +209,10 @@ class MPCForce(MPCParams):
                 break
 
             if k == force_k:
-                  self.x[1] = self.force
+                  self.x[1] += self.force
 
             if k == force_k + 1:
-                self.x[1] = 0
+                self.x[1] -= self.force
       
             self.jerk = jerk[0]
             if coord == 'x':
