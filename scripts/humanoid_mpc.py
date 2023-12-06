@@ -16,11 +16,13 @@ class feet:
     width: float
     right: foot
     left: foot
+      
+    
 
 
 
 class MPCParams():
-    def __init__(self, T, N, h_CoM, g, robot_feet, duration=8, step_duration=1):
+    def __init__(self, T, N, h_CoM, g, robot_feet, duration=8, step_duration=1, overlap=None):
         self.T = T
         self.duration = duration
         self.N = N
@@ -45,7 +47,7 @@ class MPCParams():
 
         self.feet_tracker = np.ones((int(self.duration/self.T), 2))
 
-        self.Zmin, self.Zmax = self.generate_foot_trajectory(robot_feet, step_duration)
+        self.Zmin, self.Zmax = self.generate_foot_trajectory(robot_feet, step_duration, overlap)
     def compute_next_coord(self, coord):
         if coord == 'x':        
             return self.A @ self.x + self.jerk * self.b
@@ -59,7 +61,16 @@ class MPCParams():
                     Zmax_k: np.array,
                     solver: str,
                     coord: str='x'):
-        pass
+        
+        G = np.vstack((self.Pu, -self.Pu))
+        if coord == 'x':
+            h = np.hstack((Zmax_k- self.Px @ self.x, self.Px @ self.x -Zmin_k))
+        elif coord == 'y':
+            h = np.hstack((Zmax_k- self.Px @ self.y, self.Px @ self.y -Zmin_k))
+
+        jerk = solve_qp(self.P, self.q, G=G, h=h, solver=solver)
+
+        return jerk
 
     
     def solve(self, Zmin, Zmax, coord, solver='daqp'):
@@ -71,6 +82,7 @@ class MPCParams():
             jerk = self.solve_step_k(Zmin[1+k:1+k+self.N], Zmax[1+k:1+k+self.N], solver, coord)
             if jerk is None:
                 break
+
             self.jerk = jerk[0]
             if coord == 'x':
                 self.x = self.compute_next_coord('x')
@@ -87,22 +99,28 @@ class MPCParams():
         return coord_path, z_path, jerks
 
 
-    def generate_foot_trajectory(self, robot_feet, step_duration):
+    def generate_foot_trajectory(self, robot_feet, step_duration, overlap=None):
         timesteps = int(self.duration/self.T)
         nb_steps = int(self.duration/step_duration) - 2
         nb_samples_per_step = int(step_duration/self.T)
+        if overlap is None:
+            overlap = nb_samples_per_step//5
 
         Zxmin = np.zeros(timesteps)
         Zxmax = np.zeros(timesteps)
         Zymin = np.zeros(timesteps)
         Zymax = np.zeros(timesteps)
         feet_tracker = np.ones((timesteps, 2), dtype=int)
+        left_trajectory = []
+        right_trajectory = []
 
         # First step both robot_feet are at the ground
         Zxmin[:nb_samples_per_step] = robot_feet.right.x - robot_feet.width/2
         Zxmax[:nb_samples_per_step] = robot_feet.left.x + robot_feet.width/2
         Zymin[:nb_samples_per_step] = robot_feet.right.y - robot_feet.length/2
         Zymax[:nb_samples_per_step] = robot_feet.right.y + robot_feet.length/2
+        left_trajectory.append([robot_feet.left.x, robot_feet.left.y])
+        right_trajectory.append([robot_feet.right.x, robot_feet.right.y])
 
         LEFT = 0
         RIGHT = 1
@@ -112,28 +130,51 @@ class MPCParams():
         current = nb_samples_per_step
         for step in range(nb_steps):
             if foot == LEFT:
-                Zxmin[current:current+nb_samples_per_step] = robot_feet.left.x - robot_feet.width/2
-                Zxmax[current:current+nb_samples_per_step] = robot_feet.left.x + robot_feet.width/2
+                Zxmin[current:current+nb_samples_per_step-overlap] = robot_feet.left.x - robot_feet.width/2
+                Zxmax[current:current+nb_samples_per_step-overlap] = robot_feet.left.x + robot_feet.width/2
+                
+                Zxmin[current+nb_samples_per_step-overlap:current+nb_samples_per_step] = robot_feet.right.x - robot_feet.width/2
+                Zxmax[current+nb_samples_per_step-overlap:current+nb_samples_per_step] = robot_feet.left.x + robot_feet.width/2
+
+
 
                 foot = RIGHT
-                feet_tracker[current:current+nb_samples_per_step, 1] = 0
+                feet_tracker[current:current+nb_samples_per_step-overlap, 1] = 0
+                left_trajectory.append([robot_feet.left.x, robot_feet.left.y + step * robot_feet.spread])
+
+
             else:
-                Zxmin[current:current+nb_samples_per_step] = robot_feet.right.x - robot_feet.width/2
-                Zxmax[current:current+nb_samples_per_step] = robot_feet.right.x + robot_feet.width/2
+                Zxmin[current:current+nb_samples_per_step-overlap] = robot_feet.right.x - robot_feet.width/2
+                Zxmax[current:current+nb_samples_per_step-overlap] = robot_feet.right.x + robot_feet.width/2
+
+                Zxmin[current+nb_samples_per_step-overlap:current+nb_samples_per_step] = robot_feet.right.x - robot_feet.width/2
+                Zxmax[current+nb_samples_per_step-overlap:current+nb_samples_per_step] = robot_feet.left.x + robot_feet.width/2
+
+        
+
+
                 foot = LEFT
-                feet_tracker[current:current+nb_samples_per_step, 0] = 0
+                feet_tracker[current:current+nb_samples_per_step-overlap, 0] = 0
+                right_trajectory.append([robot_feet.right.x, robot_feet.right.y + step * robot_feet.spread])
 
 
-            Zymin[current:current+nb_samples_per_step] = robot_feet.left.y - robot_feet.length/2 + (step+1) * robot_feet.spread
-            Zymax[current:current+nb_samples_per_step] = robot_feet.left.y + robot_feet.length/2 + (step+1) * robot_feet.spread
-
+            Zymin[current:current+nb_samples_per_step-overlap] = robot_feet.left.y - robot_feet.length/2 + step * robot_feet.spread
+            Zymax[current:current+nb_samples_per_step-overlap] = robot_feet.left.y + robot_feet.length/2 + step * robot_feet.spread
+        
+            Zymin[current+nb_samples_per_step-overlap:current+nb_samples_per_step] =  robot_feet.left.y - robot_feet.length/2 + step * robot_feet.spread
+            Zymax[current+nb_samples_per_step-overlap:current+nb_samples_per_step] =  robot_feet.left.y + robot_feet.length/2 + (step+1) * robot_feet.spread
             current += nb_samples_per_step
 
         # Last step both robot_feet are at the ground
         Zxmin[current:] = robot_feet.right.x - robot_feet.width/2
         Zxmax[current:] = robot_feet.left.x + robot_feet.width/2
-        Zymin[current:] = robot_feet.left.y - robot_feet.length/2 + (nb_steps+1) * robot_feet.spread
-        Zymax[current:] = robot_feet.left.y + robot_feet.length/2 + (nb_steps+1) * robot_feet.spread
+        Zymin[current-overlap:] = robot_feet.left.y - robot_feet.length/2 + (nb_steps-1) * robot_feet.spread
+        Zymax[current-overlap:] = robot_feet.left.y + robot_feet.length/2 + (nb_steps-1) * robot_feet.spread
+
+        if foot == LEFT:
+            left_trajectory.append([robot_feet.left.x, robot_feet.left.y + (nb_steps-1) * robot_feet.spread])
+        else:
+            right_trajectory.append([robot_feet.right.x, robot_feet.right.y + (nb_steps-1) * robot_feet.spread])
 
 
         # Stack in one np array
@@ -141,8 +182,53 @@ class MPCParams():
         Zmax = np.vstack((Zxmax, Zymax))
 
         self.feet_tracker = feet_tracker
+        self.left_trajectory = left_trajectory
+        self.right_trajectory = right_trajectory
 
         return Zmin, Zmax
+
+class MPCForce(MPCParams):
+    def __init__(self, T, N, h_CoM, g, robot_feet, duration=8, step_duration=1, overlap=None, force=10):
+        super().__init__(T, N, h_CoM, g, robot_feet, duration, step_duration, overlap)
+        self.x = np.zeros(3)
+        self.y = np.zeros(3)
+
+        self.P = np.identity(self.N)
+        self.q = np.zeros(self.N)
+        self.force = force
+
+    # Add force to the problem
+    def solve(self, Zmin, Zmax, coord, solver='daqp', force_k=300):
+        jerks = []
+        coord_path = []
+        z_path = []
+        timesteps = int(self.duration/self.T)
+        for k in range(timesteps-self.N):
+            jerk = self.solve_step_k(Zmin[1+k:1+k+self.N], Zmax[1+k:1+k+self.N], solver, coord)
+            if jerk is None:
+                break
+
+            if k == force_k:
+                  self.x[1] = self.force
+
+            if k == force_k + 1:
+                self.x[1] = 0
+      
+            self.jerk = jerk[0]
+            if coord == 'x':
+                self.x = self.compute_next_coord('x')
+                self.z = self.e @ self.x
+                coord_path.append(self.x[0])
+            elif coord == 'y':
+                self.y = self.compute_next_coord('y')
+                self.z = self.e @ self.y
+                coord_path.append(self.y[0])
+
+            jerks.append(self.jerk)            
+            z_path.append(self.z)
+
+        return coord_path, z_path, jerks
+    
 
 
 class MPCClassic(MPCParams):
@@ -183,39 +269,6 @@ class MPCRobust(MPCParams):
         return jerk
 
 
-class MPCForce(MPCRobust):
-    # Add force to the problem
-    def solve(self, Zmin, Zmax, coord, solver='daqp'):
-        jerks = []
-        coord_path = []
-        z_path = []
-        timesteps = int(self.duration/self.T)
-        for k in range(timesteps-self.N):
-            jerk = self.solve_step_k(Zmin[1+k:1+k+self.N], Zmax[1+k:1+k+self.N], solver, coord)
-            if jerk is None:
-                break
-
-            if k == 100:
-                  force =  10
-                  self.x[1] = force
-
-            if k == 101:
-                self.x[1] = 0
-      
-            self.jerk = jerk[0]
-            if coord == 'x':
-                self.x = self.compute_next_coord('x')
-                self.z = self.e @ self.x
-                coord_path.append(self.x[0])
-            elif coord == 'y':
-                self.y = self.compute_next_coord('y')
-                self.z = self.e @ self.y
-                coord_path.append(self.y[0])
-
-            jerks.append(self.jerk)            
-            z_path.append(self.z)
-
-        return coord_path, z_path, jerks
 
 class MPC2Paper:
     def __init__(self, T, N, h_CoM, g, alpha, beta,gamma, m, n_step, n_total):
