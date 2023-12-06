@@ -218,13 +218,15 @@ class MPCForce(MPCRobust):
         return coord_path, z_path, jerks
 
 class MPC2Paper:
-    def __init__(self, T, N, h_CoM, g, alpha, beta, m):
+    def __init__(self, T, N, h_CoM, g, alpha, beta,gamma, m, n_step, n_total):
         self.N = N
         self.h_CoM = h_CoM
         self.g = g
         self.alpha = alpha
         self.beta = beta
+        self.gamma = gamma
         self.m = m # number of steps
+        self.n_total = n_total
 
 
         # state variables
@@ -274,7 +276,19 @@ class MPC2Paper:
         self.jerk = np.zeros(N)
         
         # I dont know if we should maintain this
-        self.feet_tracker = np.ones((int(self.duration/self.T), 2))
+        #self.feet_tracker = np.ones((int(self.duration/self.T), 2))
+        self.generator = self.generate_U_Uck(n_total, N, m, n_step)
+    
+    def generate_U_Uck(self, N_tot, N, m, n):
+        for k in range(N_tot):    
+            p = k%n     
+            Uck = np.zeros((N, 1))
+            Uck[:n-p] = 1
+            Uk = np.zeros((N, m-1))
+            for i in range((N+p)//n):
+                Uk[(i+1)*n-p:(i+2)*n-p, i] = 1
+            
+            yield Uk, Uck
 
     def update_variables(self, coord):
         if coord == 'x':
@@ -292,19 +306,18 @@ class MPC2Paper:
     
     def solve(self, solver, coord):
         # TODO: 
-        # - How do obtain the matrix Uc and U 
         # - We need a velocity ref
-        # - Generate matrix Q and P
         # - This is only section 3
         # I havent implemented section 4 and 5
         jerks = []
         coord_path = []
         z_path = []
-        timesteps = int(self.duration/self.T)
-        for k in range(timesteps-self.N):
-            u = self.solve_step_k(Uc, U, Vref, solver, coord)
+        position_fc = 0
+        for k in range(self.n_total - self.N):
+            U, Uc = next(self.generator)
+            u = self.solve_step_k(Uc, U, position_fc, Vref_value=0.1, solver=solver, coord=coord)
             if u is None:
-                break
+                raise ValueError
             self.jerk = u[:self.N]
             self.position_f = u[self.N:]
             self.update_variables(coord)
@@ -316,21 +329,25 @@ class MPC2Paper:
                 z = self.z_y[0] # ?
             jerks.append(self.jerk[0])
             z_path.append(z)
+            position_fc = coord_path[-1] 
         return coord_path, z_path, jerks
     
-    def solve_step_k(self, Uc, U, Vref, position_fc, solver, coord):
+    def solve_step_k(self, Uc, U, position_fc, Vref_value, solver, coord):
+        Vref = Vref_value * np.ones(self.N)
         if coord == 'x':
             state_vector = self.x.copy()
         elif coord == 'y':
             state_vector = self.y.copy()
         # TODO: check dimensions
-        pk = np.zeros(self.N+self.m)
-        pk[:self.N] = self.beta * self.Pvu.T @ (self.Pvs @ state_vector - Vref) + self.gamma * self.Pzu.T (self.Pzs @ state_vector - Uc @ position_fc)
-        pk[self.N:] = - self.gamma * U.T @ (self.Pzs @ state_vector - Uc @ position_fc)
+        pk = np.zeros(self.N+self.m-1)
+        pk[:self.N] = self.beta * self.Pvu.T @ (self.Pvs @ state_vector - Vref) + self.gamma * self.Pzu.T @ (self.Pzs @ state_vector - Uc[:,0] * position_fc)
+        pk[self.N:] = - self.gamma * U.T @ (self.Pzs @ state_vector - Uc[:, 0] * position_fc)
         
-        Qk = np.zeros((self.N+self.m, self.N+self.m))
+        Qk = np.zeros((self.N+self.m-1, self.N+self.m-1))
         Qk[:self.N, :self.N] = self.alpha * np.identity(self.N) + self.beta * self.Pvu.T @ self.Pvu + self.gamma * self.Pzu.T @ self.Pzu
-        Qk[:self.N, self.N:] = - self.gamma * self.Pzu.T @ U.T
+        Qk[:self.N, self.N:] = - self.gamma * self.Pzu.T @ U
         Qk[self.N:, :self.N] = - self.gamma * U.T @ self.Pzu
         Qk[self.N:, self.N:] = self.gamma * U.T @ U
         
+        u = solve_qp(Qk, pk, G=np.zeros((self.N+self.m, self.N+self.m)), h=np.zeros(self.N+self.m), solver=solver)
+        return u
