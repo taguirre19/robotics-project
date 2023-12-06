@@ -194,7 +194,6 @@ class MPCClassic(MPCParams):
 
         return jerk
 
-            
 
 class MPCRobust(MPCParams):
     def solve_step_k(self,
@@ -213,7 +212,7 @@ class MPCRobust(MPCParams):
         return jerk
 
 
-class MPCForce(MPCParams):
+class MPCForce(MPCRobust):
     def __init__(self, T, N, h_CoM, g, robot_feet, duration=8, step_duration=1, overlap=None, force=10):
         super().__init__(T, N, h_CoM, g, robot_feet, duration, step_duration, overlap)
         self.x = np.zeros(3)
