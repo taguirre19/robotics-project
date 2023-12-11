@@ -37,7 +37,7 @@ class MPCParams():
         self.A = np.array([[1., T, (T**2)/2], [0., 1., T], [0., 0., 1.]]) 
         self.b = np.array([(T**3)/6., T**2/2., T])
 
-        self.e = np.array([1., 0., h_CoM/g])
+        self.e = np.array([1., 0., -h_CoM/g])
         
         self.x = np.zeros(3)
         self.y = np.zeros(3)
